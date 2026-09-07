@@ -1,0 +1,47 @@
+model:
+  d_model: 256
+  n_layers: 6
+  layer_types: [lin, swa, swa, lin, swa, lin]
+  q_heads: 2
+  d_head: 32
+  kv_heads: 1
+  window: 256
+  d_state: 32
+  d_ff: 640
+  vocab_size: 16384
+  head_levels: [16, 32, 32]
+  readout: tied
+  n_experts: 16
+  k_experts: 2
+  d_ff_e: 320
+  moe_layers: [0, 3, 5]
+  route_block: 256
+  balance_coef: 0.01
+  act: relu2
+  route_stat: window
+  gate: softmax
+
+data:
+  sequence_length: 1024
+
+optim:
+  lr: 0.0003
+  min_lr_ratio: 0.1
+  warmup_steps: 25
+  weight_decay: 0.1
+  decay_norms: false
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+
+train:
+  tokens_per_step: 4096
+  total_tokens: 1000000
+  dtype: bfloat16
+  compile: false
+  seed: 7
+  log_every: 10
+  ckpt_every: 100
+  val_every: 50
+  val_tokens: 16384
+  loss: sampled

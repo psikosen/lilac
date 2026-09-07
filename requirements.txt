@@ -1,0 +1,5 @@
+torch>=2.5
+pyyaml>=6.0
+safetensors>=0.4
+tokenizers>=0.20
+huggingface_hub>=0.25

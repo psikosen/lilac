@@ -17,26 +17,65 @@ linear attention, sliding-window attention, linear attention
 
 The paper's headline MoE result is a separate experimental arm: 3.65M active parameters, 128 experts, and block routing. Lilac will keep the dense hybrid baseline and MoE variants separate so results remain attributable.
 
-## MLX compatibility
+## Scope
 
-The idea is portable to [MLX](https://github.com/ml-explore/mlx) on Apple silicon, but the released checkpoint is not MLX-compatible out of the box.
+This first implementation is PyTorch-only. MLX conversion and parity are
+intentionally deferred so the experiment variables can be tested on the other
+computer without mixing a framework port into the results.
 
-Why:
+The reference implementation is fetched at a pinned Hugging Face revision by
+`scripts/fetch_reference.sh`; Lilac does not vendor the custom `m2r` source or
+the checkpoint weights.
 
-- the checkpoint ships custom PyTorch `m2r` code rather than a standard Transformers architecture;
-- its linear-attention state, sliding-window attention, document isolation, and decode loop need MLX implementations;
-- its `safetensors` weights need a deliberate MLX conversion and numerical parity check;
-- the Intel AMX single-core throughput numbers do not transfer directly to Apple silicon.
+## Quick start
 
-The safe path is:
+From the repository root:
 
-1. reproduce the reference model with its supplied runner;
-2. port one layer and compare PyTorch/MLX logits on identical inputs;
-3. port the full dense baseline;
-4. add MoE routing or recurrent state only after parity passes;
-5. benchmark Apple silicon separately from the AMX reference.
+```bash
+./scripts/setup.sh
+PATH=.venv/bin:$PATH ./scripts/fetch_reference.sh --weights
+```
 
-MLX already provides examples for custom language models, MoE models, LoRA, and model conversion. Lilac should use those patterns while retaining the reference model's exact behavior as the test oracle.
+Run the released checkpoint's exact QA smoke test:
+
+```bash
+python scripts/evaluate_qa.py \
+  --reference-dir .cache/reference/amx-reasoning-v1-instruct \
+  --jsonl data/qa_smoke.jsonl
+```
+
+Train a small synthetic capability model from scratch:
+
+```bash
+python scripts/train.py --config configs/dense_baseline.yaml \
+  --run-dir runs/dense-baseline
+python scripts/probe_ladder.py --run-dir runs/dense-baseline \
+  --reference-dir .cache/reference/amx-reasoning-v1-instruct
+```
+
+The default synthetic run is deliberately short. Scale it with
+`--total-tokens`, or point the trainer at `.txt`/`.jsonl` files with
+`--data-mode text --text-path /path/to/corpus`.
+
+Run the dense and E=4/8/16 comparison as isolated processes:
+
+```bash
+python scripts/run_sweep.py --total-tokens 10000000
+```
+
+Each run writes `run.json`, append-only `metrics.jsonl`, and resumable
+`checkpoint_step*.pt` files. `scripts/diagnostics.py` reports hidden-state
+participation, logit spread, and per-layer expert utilization. Routing ablations
+are process-level controls, for example:
+
+```bash
+python scripts/diagnostics.py --run-dir runs/sweep/moe_e8 --route-mode legacy
+python scripts/diagnostics.py --run-dir runs/sweep/moe_e8 --fixed-experts
+```
+
+For a corpus run, use the same tokenizer that ships with the reference cache;
+the text loader is a transparent next-token stream, while the synthetic loader
+is the controlled capability probe. Keep those results in separate run roots.
 
 ## First experiment ladder
 
@@ -73,4 +112,7 @@ Hold the architecture fixed while comparing raw data, curated data, generated re
 
 ## Status
 
-This repository currently contains the research plan. The next implementation milestone is a reference runner plus a PyTorch/MLX logit-parity test for the dense baseline.
+The initial runnable experiment kit is present: pinned reference fetch,
+released-checkpoint QA evaluation, synthetic induction/shift/add/copy probes,
+PyTorch dense and fixed-E MoE training, checkpoint resume, sweeps, and routing
+diagnostics.
