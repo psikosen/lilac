@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 reference_dir="${LILAC_REFERENCE_DIR:-$repo_root/.cache/reference/amx-reasoning-v1-instruct}"
-revision="${LILAC_REFERENCE_REVISION:-bd05a8e85cd60d66c442f9abac589c46692200e}"
+revision="${LILAC_REFERENCE_REVISION:-b144ee0138929f0181b9219177f98fc7c8d259c9}"
 with_weights=0
 
 if [[ "${1:-}" == "--weights" ]]; then
