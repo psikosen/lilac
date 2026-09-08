@@ -77,6 +77,48 @@ For a corpus run, use the same tokenizer that ships with the reference cache;
 the text loader is a transparent next-token stream, while the synthetic loader
 is the controlled capability probe. Keep those results in separate run roots.
 
+## DEX-style training track
+
+The repository also includes the useful part of DEX-Comp as an independent
+training-recipe axis: filter a teacher's correct QA responses for Stage I, then
+explore only teacher failures in Stage II. The compression-specific Mistral
+architecture is not mixed into the tiny AMX model.
+
+Create the two auditable teacher splits:
+
+```bash
+python scripts/build_teacher_splits.py \
+  --reference-dir .cache/reference/amx-reasoning-v1-instruct \
+  --input data/qa_smoke.jsonl \
+  --output-dir data/dex_smoke
+```
+
+Train Stage I on teacher-correct rows:
+
+```bash
+python scripts/train.py --config configs/dex_pd.yaml --data-mode qa \
+  --qa-jsonl data/dex_smoke/teacher_correct.jsonl --run-dir runs/dex-pd
+```
+
+Run Stage II on teacher-failed rows. The script uses grouped sampled rollouts,
+containment rewards, group-relative advantages, and a sampled-token KL anchor to
+the Stage I checkpoint:
+
+```bash
+python scripts/hard_explore.py --run-dir runs/dex-pd \
+  --failed-jsonl data/dex_smoke/teacher_failed.jsonl \
+  --steps 100 --group-size 4
+```
+
+The one-row smoke fixture may produce an empty failure split if the released
+teacher answers it correctly; in that case skip Stage II for the smoke run and
+use a larger QA file to exercise hard exploration.
+
+For a real experiment, keep held-out QA data separate and compare: all-data
+SFT, teacher-correct-only SFT, pure distillation only, and pure distillation
+plus hard exploration. Log results separately for teacher-correct and
+teacher-failed slices.
+
 ## First experiment ladder
 
 ### 1. Measurement baseline
@@ -115,4 +157,4 @@ Hold the architecture fixed while comparing raw data, curated data, generated re
 The initial runnable experiment kit is present: pinned reference fetch,
 released-checkpoint QA evaluation, synthetic induction/shift/add/copy probes,
 PyTorch dense and fixed-E MoE training, checkpoint resume, sweeps, and routing
-diagnostics.
+diagnostics, plus the DEX-style teacher-split and hard-exploration track.

@@ -175,6 +175,110 @@ class TextBatcher:
         )
 
 
+class QABatcher:
+    """Tokenize QA rows with loss only on the answer continuation.
+
+    The prompt is rendered with the reference model's own chat template. This
+    makes the DEX-style teacher split useful for the released checkpoint and
+    keeps the student training format aligned with evaluation.
+    """
+
+    def __init__(
+        self,
+        path: str | Path,
+        tokenizer: Any,
+        *,
+        sequence_length: int,
+        device: Any,
+        seed: int = 0,
+    ) -> None:
+        from m2r.data.templates import EOT, render_prompt
+
+        self.tokenizer = tokenizer
+        self.sequence_length = sequence_length
+        self.device = device
+        self.render_prompt = render_prompt
+        self.eot = EOT
+        self.rows = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
+        self.rows = [row for row in self.rows if self._valid(row)]
+        if not self.rows:
+            raise ValueError(f"no usable QA rows found in {path}")
+        self.rng = random.Random(seed)
+        self.order = list(range(len(self.rows)))
+        self.cursor = 0
+        self.rng.shuffle(self.order)
+
+    @staticmethod
+    def _valid(row: Any) -> bool:
+        answers = row.get("answers") or row.get("answer") if isinstance(row, dict) else None
+        if isinstance(answers, str):
+            answers = [answers]
+        return isinstance(row, dict) and bool(row.get("question") or row.get("prompt")) and bool(answers)
+
+    def _row_ids(self, row: dict) -> tuple[list[int], list[int]]:
+        question = row.get("question") or row.get("prompt")
+        passage = row.get("passage") or row.get("context") or ""
+        answers = row.get("answers") or row.get("answer")
+        if isinstance(answers, str):
+            answers = [answers]
+        # Teacher-correct rows carry the teacher's actual answer. Training on
+        # that continuation is closer to Stage-I imitation; raw QA rows fall
+        # back to the gold answer for ordinary supervised training.
+        answer = str(row.get("teacher_prediction") or answers[0])
+        prompt = self.render_prompt([f"{question}\n\n{passage}"], thinking=False)
+        prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False).ids
+        answer_ids = self.tokenizer.encode(
+            f"{answer}\n{self.eot}\n", add_special_tokens=False
+        ).ids
+        max_prompt = self.sequence_length - len(answer_ids) - 1
+        if max_prompt < 1:
+            answer_ids = answer_ids[: max(1, self.sequence_length - 2)]
+            max_prompt = self.sequence_length - len(answer_ids) - 1
+        prompt_ids = prompt_ids[:max_prompt]
+        return prompt_ids, answer_ids
+
+    def _encode(self, row: dict):
+        import torch
+
+        prompt_ids, answer_ids = self._row_ids(row)
+        ids = prompt_ids + answer_ids
+        inp = ids[:-1]
+        tgt = ids[1:]
+        mask = [0.0] * len(tgt)
+        answer_start = max(0, len(prompt_ids) - 1)
+        for index in range(answer_start, len(tgt)):
+            mask[index] = 1.0
+        return (
+            torch.tensor(inp, dtype=torch.long),
+            torch.tensor(tgt, dtype=torch.long),
+            torch.tensor(mask, dtype=torch.float32),
+        )
+
+    def next(self, batch_size: int) -> Batch:
+        import torch
+
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        idx = torch.zeros((batch_size, self.sequence_length), dtype=torch.long)
+        tgt = torch.zeros_like(idx)
+        mask = torch.zeros((batch_size, self.sequence_length), dtype=torch.float32)
+        for row_index in range(batch_size):
+            if self.cursor == len(self.order):
+                self.cursor = 0
+                self.rng.shuffle(self.order)
+            row = self.rows[self.order[self.cursor]]
+            self.cursor += 1
+            row_idx, row_tgt, row_mask = self._encode(row)
+            length = min(self.sequence_length, row_idx.numel())
+            idx[row_index, :length] = row_idx[:length]
+            tgt[row_index, :length] = row_tgt[:length]
+            mask[row_index, :length] = row_mask[:length]
+        pool = torch.arange(min(4096, int(max(2, self.tokenizer.get_vocab_size()))), dtype=torch.long)
+        return Batch(
+            idx.to(self.device), tgt.to(self.device), mask.to(self.device), pool.to(self.device)
+        )
+
+
 def padded_ids(ids: list[int], pad_to: int) -> tuple[Any, int]:
     """Return one row of IDs padded for the reference model's block layout."""
     import torch

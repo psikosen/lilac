@@ -41,6 +41,12 @@ def exact_match(prediction: str, answers: list[str]) -> float:
     return float(any(p == normalize_answer(a) for a in answers))
 
 
+def containment_match(prediction: str, answers: list[str]) -> float:
+    """CEM-style correctness: any normalized gold answer appears in output."""
+    p = normalize_answer(prediction)
+    return float(any(normalize_answer(answer) in p for answer in answers))
+
+
 def token_f1(prediction: str, answer: str) -> float:
     pred = normalize_answer(prediction).split()
     gold = normalize_answer(answer).split()

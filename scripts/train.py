@@ -6,6 +6,8 @@ Examples:
   python scripts/train.py --config configs/moe_e8.yaml --total-tokens 10000000
   python scripts/train.py --config configs/dense_baseline.yaml --data-mode text \
       --text-path /path/to/corpus --run-dir runs/corpus-dense
+  python scripts/train.py --config configs/dex_pd.yaml --data-mode qa \
+      --qa-jsonl data/dex/teacher_correct.jsonl --run-dir runs/dex-pd
 """
 from __future__ import annotations
 
@@ -27,7 +29,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from lilac.reference import add_reference_to_path, model_param_summary
-from lilac.tasks import Batch, SyntheticTaskBatcher, TextBatcher
+from lilac.tasks import Batch, QABatcher, SyntheticTaskBatcher, TextBatcher
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,8 +40,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda, or cuda:0")
     parser.add_argument("--dtype", choices=("auto", "float32", "bfloat16", "float16"), default="auto")
-    parser.add_argument("--data-mode", choices=("synthetic", "text"), default="synthetic")
+    parser.add_argument("--data-mode", choices=("synthetic", "text", "qa"), default="synthetic")
     parser.add_argument("--text-path", action="append", default=[])
+    parser.add_argument("--qa-jsonl", type=Path, default=None)
+    parser.add_argument("--val-qa-jsonl", type=Path, default=None)
     parser.add_argument("--task-mix", default="induction,shift,add,copy")
     parser.add_argument("--tasks-per-sequence", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -184,12 +188,26 @@ def make_run_dir(args: argparse.Namespace) -> Path:
 
 
 def make_batcher(args: argparse.Namespace, cfg: Any, reference_dir: Path,
-                 device: torch.device, seed: int) -> Any:
+                 device: torch.device, seed: int, qa_path: Path | None = None) -> Any:
     if args.data_mode == "text":
         from tokenizers import Tokenizer
 
         tokenizer = Tokenizer.from_file(str(reference_dir / "tokenizer.json"))
         return TextBatcher(args.text_path, tokenizer, device=device)
+    if args.data_mode == "qa":
+        path = qa_path or args.qa_jsonl
+        if path is None:
+            raise ValueError("--qa-jsonl is required when --data-mode qa")
+        from tokenizers import Tokenizer
+
+        tokenizer = Tokenizer.from_file(str(reference_dir / "tokenizer.json"))
+        return QABatcher(
+            path,
+            tokenizer,
+            sequence_length=cfg.data.sequence_length,
+            device=device,
+            seed=seed,
+        )
     return SyntheticTaskBatcher(
         vocab_size=cfg.model.vocab_size,
         sequence_length=cfg.data.sequence_length,
@@ -251,7 +269,9 @@ def main() -> None:
     mask = swa_mask(cfg.model, dtype=dtype, device=device)
 
     batcher: Any = make_batcher(args, cfg, Path(reference_dir), device, cfg.train.seed)
-    val_batcher: Any = make_batcher(args, cfg, Path(reference_dir), device, cfg.train.seed + 1)
+    val_batcher: Any = make_batcher(
+        args, cfg, Path(reference_dir), device, cfg.train.seed + 1, args.val_qa_jsonl
+    )
 
     source_config = run_dir / "config.source.yaml"
     shutil.copy2(args.config, source_config)
@@ -264,6 +284,8 @@ def main() -> None:
         "batch_size": batch_size,
         "tokens_per_step": tokens_per_step,
         "task_mix": args.task_mix if args.data_mode == "synthetic" else None,
+        "qa_jsonl": str(args.qa_jsonl.resolve()) if args.qa_jsonl else None,
+        "val_qa_jsonl": str(args.val_qa_jsonl.resolve()) if args.val_qa_jsonl else None,
         "tasks_per_sequence": args.tasks_per_sequence if args.data_mode == "synthetic" else None,
         **model_param_summary(cfg, model),
     }
