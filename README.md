@@ -79,10 +79,25 @@ is the controlled capability probe. Keep those results in separate run roots.
 
 ## DEX-style training track
 
-The repository also includes the useful part of DEX-Comp as an independent
-training-recipe axis: filter a teacher's correct QA responses for Stage I, then
-explore only teacher failures in Stage II. The compression-specific Mistral
+This track adapts the training recipe from
+[Compression Beyond the Uncompressed: A Two-Stage Training Recipe for Soft
+Context Compression in RAG (DEX-Comp)](https://arxiv.org/html/2609.05152v1).
+DEX-Comp first performs Pure Distillation on teacher-correct examples, then
+performs Hard Exploration only on teacher-failed examples. Lilac uses those
+ideas as an independent training-recipe axis; its compression-specific Mistral
 architecture is not mixed into the tiny AMX model.
+
+The Lilac comparison is:
+
+```text
+all-data SFT                 -> baseline training recipe
+teacher-correct-only SFT     -> Pure Distillation analogue
+teacher-correct-only + HE   -> targeted exploration analogue
+```
+
+Stage II uses grouped sampled rollouts, containment rewards, group-relative
+advantages, and a sampled-token KL anchor to the Stage I checkpoint. The KL is
+deliberately labeled as sampled-token rather than full-vocabulary KL.
 
 Create the two auditable teacher splits:
 
